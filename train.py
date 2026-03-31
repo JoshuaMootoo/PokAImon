@@ -22,10 +22,11 @@ from env import PokemonBlueEnv
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-ROM_PATH       = "pokemon_blue.gb"
-STATE_PATH     = "init.state"
-CHECKPOINT_DIR = "checkpoints"
-LOG_DIR        = "logs"
+SCRIPT_DIR     = os.path.dirname(os.path.abspath(__file__))
+ROM_PATH       = os.path.join(SCRIPT_DIR, "pokemon_blue.gb")
+STATE_PATH     = os.path.join(SCRIPT_DIR, "init.state")
+CHECKPOINT_DIR = os.path.join(SCRIPT_DIR, "checkpoints")
+LOG_DIR        = os.path.join(SCRIPT_DIR, "logs")
 
 # ---------------------------------------------------------------------------
 # Training config

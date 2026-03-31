@@ -225,7 +225,7 @@ class PokemonBlueEnv(gymnasium.Env):
         return resized[:, :, np.newaxis]  # (H, W, 1)
 
     def _get_memory_features(self) -> np.ndarray:
-        """Build a 16-element float32 observation vector from game memory."""
+        """Build a 17-element float32 observation vector from game memory."""
         mem = self.pyboy.memory
 
         badges      = read_badges(mem)

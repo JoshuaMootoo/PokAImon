@@ -35,8 +35,9 @@ from env.memory import (
     read_party_level_sum, read_party_pokemon, read_bcd, count_bits,
 )
 
-ROM_PATH   = "pokemon_blue.gb"
-STATE_PATH = "init.state"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROM_PATH   = os.path.join(SCRIPT_DIR, "pokemon_blue.gb")
+STATE_PATH = os.path.join(SCRIPT_DIR, "init.state")
 ACTIONS    = ['up', 'down', 'left', 'right', 'a', 'b', 'start']
 SCREEN_SIZE = (36, 40)  # must match training
 
@@ -75,7 +76,8 @@ def build_obs(pyboy, visited_tiles: set) -> dict:
         float(lead.get("status", 1) == 0),
         lead.get("species", 0)        / 151.0,
         min(money / 999999.0, 1.0),
-        0.0,
+        0.0,   # 15  guide progress (no guide in evaluate.py)
+        0.0,   # 16  guide target map (no guide in evaluate.py)
     ], dtype=np.float32)
 
     # Screen observation
@@ -93,7 +95,7 @@ def main():
                         help="Path to trained model (.zip extension optional).")
     parser.add_argument("--speed", type=float, default=1.0,
                         help="Emulation speed multiplier (1=normal, 2=2x, 0=unlimited).")
-    parser.add_argument("--frame-skip", type=int, default=24,
+    parser.add_argument("--frame-skip", type=int, default=16,
                         help="Frames advanced per action (should match training).")
     args = parser.parse_args()
 
