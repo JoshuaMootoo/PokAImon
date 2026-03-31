@@ -1,12 +1,20 @@
 """stream.py — Live stream viewer for Pokemon Blue AI training.
 
 Shows the AI playing at real game speed while train.py runs in the background.
-Automatically loads the latest checkpoint as training progresses — no restart needed.
+Automatically reloads the model as training progresses — no restart needed.
+
+The viewer prefers checkpoints/latest.zip (written by train.py every ~2000 steps)
+over the numbered step-checkpoints (saved every 100k steps), so you see near-real-
+time behaviour: the model reloads every 10 seconds by default.
+
+Run in a second terminal while training:
+    python train.py --no-render      # training without its own window
+    python stream.py                 # live viewer in separate terminal
 
 Usage:
-    python stream.py                   # auto-loads latest checkpoint, normal speed
+    python stream.py                   # auto-loads latest model, normal speed
     python stream.py --speed 2         # 2x game speed
-    python stream.py --check-interval 20  # check for new model every 20 seconds
+    python stream.py --check-interval 5   # reload check every 5 seconds
 """
 
 import argparse
@@ -86,13 +94,23 @@ MAP_NAMES = {
 # ---------------------------------------------------------------------------
 
 def find_latest_checkpoint():
-    """Return (path, step_count) of the highest-step checkpoint, or (None, 0)."""
-    files = glob.glob("checkpoints/pokemon_blue_ppo_*_steps.zip")
-    if not files:
-        final = "checkpoints/final_model.zip"
-        if os.path.exists(final):
-            return final, -1
-        return None, 0
+    """Return (path, key) for the most up-to-date checkpoint, or (None, 0).
+
+    Priority:
+      1. checkpoints/latest.zip  — written by LiveViewCallback every ~2000 steps;
+         preferred when it exists and is newer than the last numbered checkpoint.
+      2. Highest-step numbered checkpoint  (pokemon_blue_ppo_N_steps.zip)
+      3. checkpoints/final_model.zip
+    """
+    ckpt_dir = os.path.join(SCRIPT_DIR, "checkpoints")
+
+    # latest.zip — modification time used as the reload key so stream.py
+    # detects every new write, not just when the filename changes.
+    latest_path = os.path.join(ckpt_dir, "latest.zip")
+    latest_mtime = os.path.getmtime(latest_path) if os.path.exists(latest_path) else 0
+
+    # Highest numbered step checkpoint
+    files = glob.glob(os.path.join(ckpt_dir, "pokemon_blue_ppo_*_steps.zip"))
 
     def step_count(path):
         try:
@@ -100,8 +118,24 @@ def find_latest_checkpoint():
         except Exception:
             return 0
 
-    latest = max(files, key=step_count)
-    return latest, step_count(latest)
+    best_path, best_steps = None, 0
+    if files:
+        best_path  = max(files, key=step_count)
+        best_steps = step_count(best_path)
+
+    # Use latest.zip if it exists and is newer than the best numbered checkpoint
+    if latest_mtime > 0:
+        best_mtime = os.path.getmtime(best_path) if best_path else 0
+        if latest_mtime >= best_mtime:
+            return latest_path, latest_mtime   # key = mtime float
+
+    if best_path:
+        return best_path, best_steps
+
+    final = os.path.join(ckpt_dir, "final_model.zip")
+    if os.path.exists(final):
+        return final, -1
+    return None, 0
 
 
 def build_obs(pyboy, visited_tiles, tile_visit_count, guide, visited_maps):
@@ -321,8 +355,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--speed", type=float, default=1.0,
                         help="Playback speed multiplier (1=normal, 2=2x, 0=unlimited)")
-    parser.add_argument("--check-interval", type=float, default=30.0,
-                        help="Seconds between checkpoint checks (default 30)")
+    parser.add_argument("--check-interval", type=float, default=10.0,
+                        help="Seconds between model reload checks (default 10)")
     args = parser.parse_args()
 
     # Wait for a checkpoint to exist
@@ -360,7 +394,7 @@ def main():
 
     # OpenCV windows
     cv2.namedWindow("Pokemon Blue AI", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Pokemon Blue AI", 480, 518)
+    cv2.resizeWindow("Pokemon Blue AI", 480, 534)
     cv2.namedWindow("Exploration Map", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Exploration Map", 340, 400)
 
@@ -368,13 +402,17 @@ def main():
     model_flash  = 0.0   # timestamp of last model update (for flash effect)
     goal_milestone: int | None = None   # None = guide auto; 0-22 = user override
 
-    if current_steps > 0:
-        ckpt_label = f"Checkpoint: {current_steps:,} steps"
-    else:
-        ckpt_label = "Checkpoint: final model"
+    def make_label(path, key):
+        if "latest" in os.path.basename(path):
+            return "latest  (live)"
+        if isinstance(key, int) and key > 0:
+            return f"{key:,} steps"
+        return "final model"
+
+    ckpt_label = make_label(current_path, current_steps)
 
     print(f"Streaming at {args.speed}x speed. Press Q in the window to quit.")
-    print(f"Checking for new checkpoints every {args.check_interval}s.")
+    print(f"Reloading model every {args.check_interval}s. (latest.zip updates every ~2k training steps)")
     print("Press G to cycle goal destination, H to clear goal.")
 
     speed_multiplier = max(args.speed, 0.1)
@@ -386,13 +424,15 @@ def main():
                 last_check = time.time()
                 new_path, new_steps = find_latest_checkpoint()
                 if new_path and new_steps != current_steps:
-                    print(f"New checkpoint: {new_path}")
-                    model         = PPO.load(new_path, device="cpu")
-                    current_path  = new_path
-                    current_steps = new_steps
-                    ckpt_label    = (f"Checkpoint: {new_steps:,} steps"
-                                     if new_steps > 0 else "Checkpoint: final model")
-                    model_flash   = time.time()
+                    print(f"Reloading model: {os.path.basename(new_path)}")
+                    try:
+                        model         = PPO.load(new_path, device="cpu")
+                        current_path  = new_path
+                        current_steps = new_steps
+                        ckpt_label    = make_label(new_path, new_steps)
+                        model_flash   = time.time()
+                    except Exception as e:
+                        print(f"  reload failed ({e}), keeping current model")
 
             model_updated = (time.time() - model_flash) < 3.0
 

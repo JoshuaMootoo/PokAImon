@@ -61,11 +61,18 @@ WINDOW_TITLE = "Pokemon Blue - Training (env 0)"
 # ---------------------------------------------------------------------------
 
 class LiveViewCallback(BaseCallback):
-    """Shows a live Game Boy window with stats from the first training environment."""
+    """Shows a live Game Boy window with stats from the first training environment.
 
-    def __init__(self, render_freq: int = 100, verbose: int = 0):
+    Also writes checkpoints/latest.zip every `save_latest_freq` steps so that
+    stream.py can reload the current model in near-real-time without waiting for
+    the full 100k-step checkpoint interval.
+    """
+
+    def __init__(self, render_freq: int = 100, save_latest_freq: int = 2000,
+                 verbose: int = 0):
         super().__init__(verbose)
-        self.render_freq = render_freq
+        self.render_freq      = render_freq
+        self.save_latest_freq = save_latest_freq
         self._last_info: dict = {}
 
     def _on_step(self) -> bool:
@@ -73,6 +80,15 @@ class LiveViewCallback(BaseCallback):
         infos = self.locals.get("infos", [])
         if infos:
             self._last_info = infos[0]
+
+        # Periodically overwrite checkpoints/latest.zip so stream.py can
+        # pick it up and show near-real-time behaviour without waiting
+        # for the full 100k-step checkpoint.
+        if self.n_calls % self.save_latest_freq == 0:
+            try:
+                self.model.save(os.path.join(CHECKPOINT_DIR, "latest"))
+            except Exception:
+                pass
 
         if self.n_calls % self.render_freq == 0:
             try:
