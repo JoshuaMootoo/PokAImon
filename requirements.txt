@@ -5,4 +5,3 @@ numpy>=1.24.0
 torch>=2.0.0
 tensorboard>=2.14.0
 opencv-python>=4.8.0
-anthropic>=0.40.0
