@@ -61,22 +61,46 @@ WINDOW_TITLE = "Pokemon Blue - Training (env 0)"
 # ---------------------------------------------------------------------------
 
 class LiveViewCallback(BaseCallback):
-    """Shows a live Game Boy window from the first training environment."""
+    """Shows a live Game Boy window with stats from the first training environment."""
 
     def __init__(self, render_freq: int = 100, verbose: int = 0):
         super().__init__(verbose)
-        self.render_freq = render_freq  # update display every N callback steps
+        self.render_freq = render_freq
+        self._last_info: dict = {}
 
     def _on_step(self) -> bool:
+        # Keep the latest info dict from env 0 so we always have fresh stats
+        infos = self.locals.get("infos", [])
+        if infos:
+            self._last_info = infos[0]
+
         if self.n_calls % self.render_freq == 0:
             try:
-                # Grab the current frame from env 0 (runs in a subprocess)
                 frames = self.training_env.env_method("render", indices=[0])
                 if frames and frames[0] is not None:
                     frame = np.array(frames[0])          # (144, 160, 3) RGB
                     bgr   = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                     bgr   = cv2.resize(bgr, (480, 432), interpolation=cv2.INTER_NEAREST)
-                    cv2.imshow(WINDOW_TITLE, bgr)
+
+                    # Build stats footer
+                    info      = self._last_info
+                    badges    = info.get("badges", 0)
+                    levels    = info.get("level_sum", 0)
+                    pokedex   = info.get("pokedex", 0)
+                    tiles     = info.get("visited_tiles", 0)
+                    milestone = info.get("guide_name", "—")
+                    steps     = self.n_calls
+
+                    footer = np.zeros((50, 480, 3), dtype=np.uint8)
+                    cv2.putText(footer,
+                        f"Badges: {badges}/8   Levels: {levels}   Dex: {pokedex}/151   Tiles: {tiles}",
+                        (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+                    cv2.putText(footer,
+                        f"Goal: {milestone}   Steps: {steps:,}",
+                        (8, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (100, 200, 255), 1)
+
+                    display = np.vstack([bgr, footer])
+                    cv2.imshow(WINDOW_TITLE, display)
                     cv2.waitKey(1)
             except Exception:
                 pass  # never crash training due to a display error

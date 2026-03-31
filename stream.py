@@ -29,13 +29,14 @@ from env.memory import (
     read_party_pokemon, read_bcd, count_bits,
     MONEY_0,
 )
-from env.guide import GameGuide
+from env.guide import GameGuide, MILESTONES, NUM_MILESTONES
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-ROM_PATH   = "pokemon_blue.gb"
-STATE_PATH = "init.state"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROM_PATH   = os.path.join(SCRIPT_DIR, "pokemon_blue.gb")
+STATE_PATH = os.path.join(SCRIPT_DIR, "init.state")
 FRAME_SKIP = 16           # actions per game second (matches training)
 TARGET_FPS = 60           # display frames per second
 FRAME_TIME = 1.0 / TARGET_FPS
@@ -255,7 +256,8 @@ def build_heatmap(all_time_tile_count, current_map_id, player_x, player_y):
     return panel
 
 
-def build_frame(pyboy, stats, checkpoint_label, model_updated, action_name="", episode_step=0):
+def build_frame(pyboy, stats, checkpoint_label, model_updated, action_name="",
+                episode_step=0, goal_milestone=None):
     """Render the game + HUD into a display frame."""
     rgb     = np.array(pyboy.screen.image)          # (144, 160, 3)
     game    = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
@@ -282,7 +284,7 @@ def build_frame(pyboy, stats, checkpoint_label, model_updated, action_name="", e
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 128), 1)
 
     # --- footer bar ---
-    footer = np.zeros((50, 480, 3), dtype=np.uint8)
+    footer = np.zeros((66, 480, 3), dtype=np.uint8)
 
     badge_str = f"Badges: {stats['badges']}/8"
     level_str = f"Lv total: {stats['level_sum']}"
@@ -291,14 +293,24 @@ def build_frame(pyboy, stats, checkpoint_label, model_updated, action_name="", e
     map_str   = f"Map: {stats['map_id']}"
     status    = "BATTLE" if stats["in_battle"] else f"HP {int(stats['hp']*100)}%"
 
-    cv2.putText(footer, f"{badge_str}   {level_str}   {dex_str}", (8, 20),
+    cv2.putText(footer, f"{badge_str}   {level_str}   {dex_str}", (8, 18),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
     step_str = f"Step: {episode_step}/4096   Action: {action_name}"
-    cv2.putText(footer, f"{tile_str}   {map_str}   {status}   {step_str}", (8, 40),
+    cv2.putText(footer, f"{tile_str}   {map_str}   {status}   {step_str}", (8, 36),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                 (0, 200, 255) if stats["in_battle"] else (180, 180, 180), 1)
 
-    return np.vstack([header, game, footer])   # (518, 480, 3)
+    # Goal line
+    if goal_milestone is not None:
+        name, _, _ = MILESTONES[goal_milestone]
+        goal_text = f"GOAL: {name.replace('_', ' ').title()}  ({goal_milestone + 1}/{NUM_MILESTONES})  [H=clear]"
+        cv2.putText(footer, goal_text, (8, 56),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1)
+    else:
+        cv2.putText(footer, "G=set goal   H=clear goal   Q=quit", (8, 56),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (60, 60, 60), 1)
+
+    return np.vstack([header, game, footer])   # (534, 480, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +366,7 @@ def main():
 
     last_check   = time.time()
     model_flash  = 0.0   # timestamp of last model update (for flash effect)
+    goal_milestone: int | None = None   # None = guide auto; 0-22 = user override
 
     if current_steps > 0:
         ckpt_label = f"Checkpoint: {current_steps:,} steps"
@@ -362,6 +375,7 @@ def main():
 
     print(f"Streaming at {args.speed}x speed. Press Q in the window to quit.")
     print(f"Checking for new checkpoints every {args.check_interval}s.")
+    print("Press G to cycle goal destination, H to clear goal.")
 
     speed_multiplier = max(args.speed, 0.1)
 
@@ -383,9 +397,14 @@ def main():
             model_updated = (time.time() - model_flash) < 3.0
 
             # --- Get AI action ---
-            obs          = build_obs(pyboy, visited_tiles, tile_visit_count, guide, visited_maps)
-            action, _    = model.predict(obs, deterministic=False)  # sample like training does
-            btn          = ACTIONS[int(action)]
+            obs = build_obs(pyboy, visited_tiles, tile_visit_count, guide, visited_maps)
+            # If user set a goal, override the guide hint features the model reads
+            if goal_milestone is not None:
+                obs["memory_features"][15] = goal_milestone / (NUM_MILESTONES - 1)
+                _, target_map, _ = MILESTONES[goal_milestone]
+                obs["memory_features"][16] = target_map / 255.0
+            action, _ = model.predict(obs, deterministic=False)  # sample like training does
+            btn       = ACTIONS[int(action)]
             stats        = read_stats(pyboy, visited_tiles)
 
             # Update visited tiles (episode + all-time) and global map set
@@ -407,7 +426,7 @@ def main():
 
                 pyboy.tick(1, True)   # render=True keeps screen buffer fresh
 
-                display = build_frame(pyboy, stats, ckpt_label, model_updated, btn, episode_step)
+                display = build_frame(pyboy, stats, ckpt_label, model_updated, btn, episode_step, goal_milestone)
                 cv2.imshow("Pokemon Blue AI", display)
 
                 # Update the exploration map once per action (last frame only)
@@ -421,6 +440,13 @@ def main():
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord('q'), 27):   # Q or ESC
                     raise KeyboardInterrupt
+                elif key == ord('g'):
+                    goal_milestone = 0 if goal_milestone is None else (goal_milestone + 1) % NUM_MILESTONES
+                    name, _, _ = MILESTONES[goal_milestone]
+                    print(f"Goal set: {name.replace('_', ' ').title()} (milestone {goal_milestone})")
+                elif key == ord('h'):
+                    goal_milestone = None
+                    print("Goal cleared.")
 
                 # Throttle to target FPS scaled by speed multiplier
                 elapsed = time.perf_counter() - t_start

@@ -5,9 +5,12 @@ Controls:
   Z or comma (,)     — A button
   X or period (.)    — B button
   Enter              — Start
+  G                  — cycle goal forward (nudge AI toward next milestone)
+  H                  — clear goal (return to no-hint mode)
   Q / ESC            — quit
 
-Hold a key to take over. Release it and the AI resumes immediately.
+Hold a movement key to take over. Release it and the AI resumes immediately.
+Press G to cycle through destinations and give the AI a goal to aim for.
 
 Usage:
     python watch.py                        # auto-loads latest checkpoint
@@ -32,9 +35,11 @@ from env.memory import (
     read_badges, is_in_battle, read_party_hp_fraction,
     read_party_level_sum, read_party_pokemon, read_bcd, count_bits,
 )
+from env.guide import MILESTONES, NUM_MILESTONES
 
-ROM_PATH   = "pokemon_blue.gb"
-STATE_PATH = "init.state"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROM_PATH   = os.path.join(SCRIPT_DIR, "pokemon_blue.gb")
+STATE_PATH = os.path.join(SCRIPT_DIR, "init.state")
 ACTIONS    = ['up', 'down', 'left', 'right', 'a', 'b', 'start']
 
 PRESS = {
@@ -86,28 +91,39 @@ def find_latest_checkpoint() -> str | None:
     return final if os.path.exists(final) else None
 
 
-def build_obs(pyboy, visited_tiles: set) -> dict:
+def build_obs(pyboy, visited_tiles: set, goal_milestone: int | None = None) -> dict:
     mem         = pyboy.memory
     party_count = mem[PARTY_COUNT]
     lead        = read_party_pokemon(mem, 0) if party_count > 0 else {}
 
+    # Features 15 & 16: guide hints.  When a goal is active the user's chosen
+    # milestone overrides these, steering the AI toward that destination.
+    if goal_milestone is not None:
+        guide_progress  = goal_milestone / (NUM_MILESTONES - 1)
+        _, target_map, _ = MILESTONES[goal_milestone]
+        guide_target    = target_map / 255.0
+    else:
+        guide_progress  = 0.0
+        guide_target    = 0.0
+
     features = np.array([
-        read_badges(mem)                              / 8.0,
-        party_count                                   / 6.0,
-        read_party_hp_fraction(mem),
-        lead.get('level', 0)                          / 100.0,
-        read_party_level_sum(mem)                     / 600.0,
-        count_bits(mem, POKEDEX_OWNED_START, 19)      / 151.0,
-        count_bits(mem, POKEDEX_SEEN_START, 19)       / 151.0,
-        mem[MAP_ID]                                   / 255.0,
-        mem[PLAYER_X]                                 / 255.0,
-        mem[PLAYER_Y]                                 / 255.0,
-        float(is_in_battle(mem)),
-        min(len(visited_tiles) / 2000.0, 1.0),
-        float(lead.get('status', 1) == 0),
-        lead.get('species', 0)                        / 151.0,
-        min(read_bcd(mem, MONEY_0, 3) / 999999.0, 1.0),
-        0.0,
+        read_badges(mem)                              / 8.0,    # 0
+        party_count                                   / 6.0,    # 1
+        read_party_hp_fraction(mem),                            # 2
+        lead.get('level', 0)                          / 100.0,  # 3
+        read_party_level_sum(mem)                     / 600.0,  # 4
+        count_bits(mem, POKEDEX_OWNED_START, 19)      / 151.0,  # 5
+        count_bits(mem, POKEDEX_SEEN_START, 19)       / 151.0,  # 6
+        mem[MAP_ID]                                   / 255.0,  # 7
+        mem[PLAYER_X]                                 / 255.0,  # 8
+        mem[PLAYER_Y]                                 / 255.0,  # 9
+        float(is_in_battle(mem)),                               # 10
+        min(len(visited_tiles) / 2000.0, 1.0),                  # 11
+        float(lead.get('status', 1) == 0),                      # 12
+        lead.get('species', 0)                        / 151.0,  # 13
+        min(read_bcd(mem, MONEY_0, 3) / 999999.0, 1.0),        # 14
+        guide_progress,                                          # 15
+        guide_target,                                            # 16
     ], dtype=np.float32)
 
     gray   = cv2.cvtColor(np.array(pyboy.screen.image), cv2.COLOR_RGB2GRAY)
@@ -115,9 +131,10 @@ def build_obs(pyboy, visited_tiles: set) -> dict:
     return {'screen': screen, 'memory_features': features}
 
 
-def draw_hud(display: np.ndarray, mode: str, btn: str, stats: dict) -> np.ndarray:
+def draw_hud(display: np.ndarray, mode: str, btn: str, stats: dict,
+             goal_milestone: int | None) -> np.ndarray:
     """Add a HUD bar below the game frame."""
-    hud = np.zeros((72, display.shape[1], 3), dtype=np.uint8)
+    hud = np.zeros((88, display.shape[1], 3), dtype=np.uint8)
 
     # Mode pill
     if mode == 'AI':
@@ -137,9 +154,18 @@ def draw_hud(display: np.ndarray, mode: str, btn: str, stats: dict) -> np.ndarra
                  f"Tiles {stats['tiles']}")
     cv2.putText(hud, stat_line, (8, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (190, 190, 190), 1)
 
+    # Goal line
+    if goal_milestone is not None:
+        name, _, _ = MILESTONES[goal_milestone]
+        goal_label = f"GOAL: {name.replace('_', ' ').title()}  ({goal_milestone + 1}/{NUM_MILESTONES})  [H=clear]"
+        cv2.putText(hud, goal_label, (8, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1)
+    else:
+        cv2.putText(hud, "No goal set  [G=set goal]", (8, 68),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (80, 80, 80), 1)
+
     # Controls hint
-    hint = "Hold WASD/arrows=move  Z=A  X=B  Enter=Start  Q=quit"
-    cv2.putText(hud, hint, (8, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (90, 90, 90), 1)
+    hint = "WASD/arrows=move  Z=A  X=B  Enter=Start  G=goal  H=clear goal  Q=quit"
+    cv2.putText(hud, hint, (8, 84), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (60, 60, 60), 1)
 
     return np.vstack([display, hud])
 
@@ -189,11 +215,13 @@ def main():
     mode               = 'AI'
     btn                = 'none'
     stats              = {'badges': 0, 'levels': 0, 'pokedex': 0, 'tiles': 0}
+    goal_milestone: int | None = None   # None = no hint; 0-22 = active goal
 
     cv2.namedWindow('Pokemon Blue AI', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow('Pokemon Blue AI', 480, 504)
+    cv2.resizeWindow('Pokemon Blue AI', 480, 520)
 
-    print('\nWatching … hold a key to take control, release to hand back to AI.\n')
+    print('\nWatching … hold a key to take control, release to hand back to AI.')
+    print('Press G to set a goal destination, H to clear it.\n')
 
     try:
         while True:
@@ -215,16 +243,25 @@ def main():
                 lk = key & 0xFF
                 if lk in (ord('q'), 27):   # Q or ESC
                     break
-                human_btn = KEY_MAP.get(key) or KEY_MAP.get(lk)
+                elif lk == ord('g'):
+                    # Cycle goal forward through milestones
+                    goal_milestone = 0 if goal_milestone is None else (goal_milestone + 1) % NUM_MILESTONES
+                    name, _, _ = MILESTONES[goal_milestone]
+                    print(f"Goal set: {name.replace('_', ' ').title()} (milestone {goal_milestone})")
+                elif lk == ord('h'):
+                    goal_milestone = None
+                    print("Goal cleared.")
+                else:
+                    human_btn = KEY_MAP.get(key) or KEY_MAP.get(lk)
 
             if human_btn is not None:
                 mode = 'YOU'
                 btn  = human_btn
             else:
-                mode      = 'AI'
-                obs       = build_obs(pyboy, visited_tiles)
+                mode         = 'AI'
+                obs          = build_obs(pyboy, visited_tiles, goal_milestone)
                 ai_action, _ = model.predict(obs, deterministic=True)
-                btn       = ACTIONS[int(ai_action)]
+                btn          = ACTIONS[int(ai_action)]
 
             # --- Execute action — render every frame at target speed ---
             frame_duration = 1.0 / (60.0 * args.speed) if args.speed > 0 else 0.0
@@ -235,7 +272,7 @@ def main():
                 rgb     = np.array(pyboy.screen.image)
                 bgr     = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
                 bgr     = cv2.resize(bgr, (480, 432), interpolation=cv2.INTER_NEAREST)
-                display = draw_hud(bgr, mode, btn, stats)
+                display = draw_hud(bgr, mode, btn, stats, goal_milestone)
                 cv2.imshow('Pokemon Blue AI', display)
                 cv2.waitKey(1)
                 # throttle to target fps
