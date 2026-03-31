@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "TensorBoard",
+      "runtimeExecutable": "tensorboard",
+      "runtimeArgs": ["--logdir", "logs", "--port", "6006"],
+      "port": 6006
+    },
+    {
+      "name": "Train",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["train.py"],
+      "port": null
+    },
+    {
+      "name": "Evaluate (watch agent play)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["evaluate.py", "--model", "checkpoints/final_model", "--speed", "3"],
+      "port": null
+    }
+  ]
+}
