@@ -37,7 +37,7 @@ from env.memory import (
     read_party_pokemon, read_bcd, count_bits,
     MONEY_0,
 )
-from env.guide import GameGuide, MILESTONES, NUM_MILESTONES
+from env.guide import GameGuide, MILESTONES, MILESTONE_HINTS, NUM_MILESTONES
 
 # ---------------------------------------------------------------------------
 # Config
@@ -291,7 +291,7 @@ def build_heatmap(all_time_tile_count, current_map_id, player_x, player_y):
 
 
 def build_frame(pyboy, stats, checkpoint_label, model_updated, action_name="",
-                episode_step=0, goal_milestone=None):
+                episode_step=0, goal_milestone=None, hint_text=""):
     """Render the game + HUD into a display frame."""
     rgb     = np.array(pyboy.screen.image)          # (144, 160, 3)
     game    = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
@@ -300,25 +300,22 @@ def build_frame(pyboy, stats, checkpoint_label, model_updated, action_name="",
     # --- header bar ---
     header = np.zeros((36, 480, 3), dtype=np.uint8)
 
-    # Red live dot
     cv2.circle(header, (14, 18), 7, (0, 0, 220), -1)
     cv2.putText(header, "LIVE", (26, 23),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
 
-    # Checkpoint label (right-aligned)
     ckpt_text = checkpoint_label
     (tw, _), _ = cv2.getTextSize(ckpt_text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
     cv2.putText(header, ckpt_text, (480 - tw - 8, 23),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                 (0, 255, 128) if model_updated else (180, 180, 180), 1)
 
-    # Model updated flash
     if model_updated:
         cv2.putText(header, "MODEL UPDATED", (90, 23),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 128), 1)
 
-    # --- footer bar ---
-    footer = np.zeros((66, 480, 3), dtype=np.uint8)
+    # --- footer bar (4 lines) ---
+    footer = np.zeros((82, 480, 3), dtype=np.uint8)
 
     badge_str = f"Badges: {stats['badges']}/8"
     level_str = f"Lv total: {stats['level_sum']}"
@@ -327,24 +324,29 @@ def build_frame(pyboy, stats, checkpoint_label, model_updated, action_name="",
     map_str   = f"Map: {stats['map_id']}"
     status    = "BATTLE" if stats["in_battle"] else f"HP {int(stats['hp']*100)}%"
 
-    cv2.putText(footer, f"{badge_str}   {level_str}   {dex_str}", (8, 18),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+    cv2.putText(footer, f"{badge_str}   {level_str}   {dex_str}", (8, 16),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1)
     step_str = f"Step: {episode_step}/4096   Action: {action_name}"
-    cv2.putText(footer, f"{tile_str}   {map_str}   {status}   {step_str}", (8, 36),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+    cv2.putText(footer, f"{tile_str}   {map_str}   {status}   {step_str}", (8, 32),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42,
                 (0, 200, 255) if stats["in_battle"] else (180, 180, 180), 1)
 
     # Goal line
     if goal_milestone is not None:
         name, _, _ = MILESTONES[goal_milestone]
         goal_text = f"GOAL: {name.replace('_', ' ').title()}  ({goal_milestone + 1}/{NUM_MILESTONES})  [H=clear]"
-        cv2.putText(footer, goal_text, (8, 56),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1)
+        cv2.putText(footer, goal_text, (8, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 220, 255), 1)
     else:
-        cv2.putText(footer, "G=set goal   H=clear goal   Q=quit", (8, 56),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (60, 60, 60), 1)
+        cv2.putText(footer, "G=set goal   H=clear   Q=quit", (8, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (55, 55, 55), 1)
 
-    return np.vstack([header, game, footer])   # (534, 480, 3)
+    # Hint line — what the agent should do right now
+    if hint_text:
+        cv2.putText(footer, hint_text[:78], (8, 68),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.33, (120, 200, 120), 1)
+
+    return np.vstack([header, game, footer])   # (550, 480, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +468,11 @@ def main():
 
                 pyboy.tick(1, True)   # render=True keeps screen buffer fresh
 
-                display = build_frame(pyboy, stats, ckpt_label, model_updated, btn, episode_step, goal_milestone)
+                if goal_milestone is not None:
+                    hint = MILESTONE_HINTS[goal_milestone]
+                else:
+                    hint = guide.milestone_hint
+                display = build_frame(pyboy, stats, ckpt_label, model_updated, btn, episode_step, goal_milestone, hint_text=hint)
                 cv2.imshow("Pokemon Blue AI", display)
 
                 # Update the exploration map once per action (last frame only)

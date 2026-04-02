@@ -35,7 +35,7 @@ from env.memory import (
     read_badges, is_in_battle, read_party_hp_fraction,
     read_party_level_sum, read_party_pokemon, read_bcd, count_bits,
 )
-from env.guide import MILESTONES, NUM_MILESTONES
+from env.guide import MILESTONES, MILESTONE_HINTS, NUM_MILESTONES
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROM_PATH   = os.path.join(SCRIPT_DIR, "pokemon_blue.gb")
@@ -79,7 +79,8 @@ KEY_MAP = {
 # ---------------------------------------------------------------------------
 
 def find_latest_checkpoint() -> str | None:
-    files = glob.glob("checkpoints/pokemon_blue_ppo_*_steps.zip")
+    ckpt_dir = os.path.join(SCRIPT_DIR, "checkpoints")
+    files = glob.glob(os.path.join(ckpt_dir, "pokemon_blue_ppo_*_steps.zip"))
     if files:
         def step_num(p):
             try:
@@ -87,7 +88,7 @@ def find_latest_checkpoint() -> str | None:
             except Exception:
                 return 0
         return max(files, key=step_num)
-    final = "checkpoints/final_model.zip"
+    final = os.path.join(ckpt_dir, "final_model.zip")
     return final if os.path.exists(final) else None
 
 
@@ -134,7 +135,7 @@ def build_obs(pyboy, visited_tiles: set, goal_milestone: int | None = None) -> d
 def draw_hud(display: np.ndarray, mode: str, btn: str, stats: dict,
              goal_milestone: int | None) -> np.ndarray:
     """Add a HUD bar below the game frame."""
-    hud = np.zeros((88, display.shape[1], 3), dtype=np.uint8)
+    hud = np.zeros((104, display.shape[1], 3), dtype=np.uint8)
 
     # Mode pill
     if mode == 'AI':
@@ -159,13 +160,16 @@ def draw_hud(display: np.ndarray, mode: str, btn: str, stats: dict,
         name, _, _ = MILESTONES[goal_milestone]
         goal_label = f"GOAL: {name.replace('_', ' ').title()}  ({goal_milestone + 1}/{NUM_MILESTONES})  [H=clear]"
         cv2.putText(hud, goal_label, (8, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1)
+        # Hint text for the active goal
+        hint_text = MILESTONE_HINTS[goal_milestone]
+        cv2.putText(hud, hint_text[:78], (8, 86), cv2.FONT_HERSHEY_SIMPLEX, 0.33, (120, 200, 120), 1)
     else:
         cv2.putText(hud, "No goal set  [G=set goal]", (8, 68),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.42, (80, 80, 80), 1)
 
     # Controls hint
-    hint = "WASD/arrows=move  Z=A  X=B  Enter=Start  G=goal  H=clear goal  Q=quit"
-    cv2.putText(hud, hint, (8, 84), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (60, 60, 60), 1)
+    controls = "WASD/arrows=move  Z=A  X=B  Enter=Start  G=goal  H=clear goal  Q=quit"
+    cv2.putText(hud, controls, (8, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (60, 60, 60), 1)
 
     return np.vstack([display, hud])
 
@@ -218,7 +222,7 @@ def main():
     goal_milestone: int | None = None   # None = no hint; 0-22 = active goal
 
     cv2.namedWindow('Pokemon Blue AI', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow('Pokemon Blue AI', 480, 520)
+    cv2.resizeWindow('Pokemon Blue AI', 480, 536)
 
     print('\nWatching … hold a key to take control, release to hand back to AI.')
     print('Press G to set a goal destination, H to clear it.\n')

@@ -181,6 +181,7 @@ class PokemonBlueEnv(gymnasium.Env):
             "pokedex": self.prev_pokedex_count,
             "guide_milestone": self.guide.milestone_index,
             "guide_name": self.guide.milestone_name,
+            "guide_hint": self.guide.milestone_hint,
         }
         return obs, reward, terminated, truncated, info
 
